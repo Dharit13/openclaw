@@ -2307,7 +2307,7 @@ describe("security audit", () => {
               guilds: {
                 "123": {
                   channels: {
-                    general: { allow: true },
+                    general: { enabled: true },
                   },
                 },
               },
@@ -2328,7 +2328,7 @@ describe("security audit", () => {
               guilds: {
                 "123": {
                   channels: {
-                    general: { allow: true },
+                    general: { enabled: true },
                   },
                 },
               },
@@ -2371,7 +2371,7 @@ describe("security audit", () => {
               guilds: {
                 "123": {
                   channels: {
-                    general: { allow: true },
+                    general: { enabled: true },
                   },
                 },
               },
@@ -2386,7 +2386,7 @@ describe("security audit", () => {
               guilds: {
                 "123": {
                   channels: {
-                    general: { allow: true },
+                    general: { enabled: true },
                   },
                 },
               },
@@ -2955,7 +2955,7 @@ describe("security audit", () => {
             guilds: {
               "123": {
                 channels: {
-                  general: { allow: true },
+                  general: { enabled: true },
                 },
               },
             },
@@ -3757,7 +3757,7 @@ describe("security audit", () => {
               guilds: {
                 "1234567890": {
                   channels: {
-                    "7777777777": { allow: true },
+                    "7777777777": { enabled: true },
                   },
                 },
               },

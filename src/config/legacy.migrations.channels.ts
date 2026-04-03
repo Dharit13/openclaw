@@ -113,6 +113,69 @@ function hasLegacyStreamingKeysInAccounts(
   return Object.values(accounts).some((entry) => matchEntry(getRecord(entry) ?? {}));
 }
 
+function hasLegacyAllowAlias(entry: Record<string, unknown>): boolean {
+  return hasOwnKey(entry, "allow");
+}
+
+function migrateAllowAliasForPath(params: {
+  entry: Record<string, unknown>;
+  pathPrefix: string;
+  changes: string[];
+}): boolean {
+  if (!hasLegacyAllowAlias(params.entry)) {
+    return false;
+  }
+
+  const legacyAllow = params.entry.allow;
+  const hadEnabled = params.entry.enabled !== undefined;
+  if (!hadEnabled) {
+    params.entry.enabled = legacyAllow;
+  }
+  delete params.entry.allow;
+
+  if (hadEnabled) {
+    params.changes.push(
+      `Removed ${params.pathPrefix}.allow (${params.pathPrefix}.enabled already set).`,
+    );
+  } else {
+    params.changes.push(`Moved ${params.pathPrefix}.allow → ${params.pathPrefix}.enabled.`);
+  }
+  return true;
+}
+
+function hasLegacySlackChannelAllowAlias(value: unknown): boolean {
+  const entry = getRecord(value);
+  const channels = getRecord(entry?.channels);
+  if (!channels) {
+    return false;
+  }
+  return Object.values(channels).some((channel) => hasLegacyAllowAlias(getRecord(channel) ?? {}));
+}
+
+function hasLegacyGoogleChatGroupAllowAlias(value: unknown): boolean {
+  const entry = getRecord(value);
+  const groups = getRecord(entry?.groups);
+  if (!groups) {
+    return false;
+  }
+  return Object.values(groups).some((group) => hasLegacyAllowAlias(getRecord(group) ?? {}));
+}
+
+function hasLegacyDiscordGuildChannelAllowAlias(value: unknown): boolean {
+  const entry = getRecord(value);
+  const guilds = getRecord(entry?.guilds);
+  if (!guilds) {
+    return false;
+  }
+  return Object.values(guilds).some((guildValue) => {
+    const channels = getRecord(getRecord(guildValue)?.channels);
+    if (!channels) {
+      return false;
+    }
+    return Object.values(channels).some((channel) => hasLegacyAllowAlias(getRecord(channel) ?? {}));
+  });
+}
+
 const THREAD_BINDING_RULES: LegacyConfigRule[] = [
   {
     path: ["session", "threadBindings"],
@@ -164,6 +227,46 @@ const CHANNEL_STREAMING_RULES: LegacyConfigRule[] = [
     message:
       "channels.slack.accounts.<id>.streamMode and boolean channels.slack.accounts.<id>.streaming are legacy; use channels.slack.accounts.<id>.streaming with enum values instead (auto-migrated on load).",
     match: (value) => hasLegacyStreamingKeysInAccounts(value, hasLegacySlackStreamingKeys),
+  },
+];
+
+const CHANNEL_ENABLED_ALIAS_RULES: LegacyConfigRule[] = [
+  {
+    path: ["channels", "slack"],
+    message:
+      "channels.slack.channels.<id>.allow is legacy; use channels.slack.channels.<id>.enabled instead (auto-migrated on load).",
+    match: (value) => hasLegacySlackChannelAllowAlias(value),
+  },
+  {
+    path: ["channels", "slack", "accounts"],
+    message:
+      "channels.slack.accounts.<id>.channels.<id>.allow is legacy; use channels.slack.accounts.<id>.channels.<id>.enabled instead (auto-migrated on load).",
+    match: (value) => hasLegacyStreamingKeysInAccounts(value, hasLegacySlackChannelAllowAlias),
+  },
+  {
+    path: ["channels", "googlechat"],
+    message:
+      "channels.googlechat.groups.<id>.allow is legacy; use channels.googlechat.groups.<id>.enabled instead (auto-migrated on load).",
+    match: (value) => hasLegacyGoogleChatGroupAllowAlias(value),
+  },
+  {
+    path: ["channels", "googlechat", "accounts"],
+    message:
+      "channels.googlechat.accounts.<id>.groups.<id>.allow is legacy; use channels.googlechat.accounts.<id>.groups.<id>.enabled instead (auto-migrated on load).",
+    match: (value) => hasLegacyStreamingKeysInAccounts(value, hasLegacyGoogleChatGroupAllowAlias),
+  },
+  {
+    path: ["channels", "discord"],
+    message:
+      "channels.discord.guilds.<id>.channels.<id>.allow is legacy; use channels.discord.guilds.<id>.channels.<id>.enabled instead (auto-migrated on load).",
+    match: (value) => hasLegacyDiscordGuildChannelAllowAlias(value),
+  },
+  {
+    path: ["channels", "discord", "accounts"],
+    message:
+      "channels.discord.accounts.<id>.guilds.<id>.channels.<id>.allow is legacy; use channels.discord.accounts.<id>.guilds.<id>.channels.<id>.enabled instead (auto-migrated on load).",
+    match: (value) =>
+      hasLegacyStreamingKeysInAccounts(value, hasLegacyDiscordGuildChannelAllowAlias),
   },
 ];
 
@@ -323,6 +426,122 @@ export const LEGACY_CONFIG_MIGRATIONS_CHANNELS: LegacyConfigMigrationSpec[] = [
       migrateProvider("telegram");
       migrateProvider("discord");
       migrateProvider("slack");
+    },
+  }),
+  defineLegacyConfigMigration({
+    id: "channels.allow->channels.enabled",
+    describe:
+      "Normalize legacy nested channel allow toggles to enabled (Slack/Google Chat/Discord)",
+    legacyRules: CHANNEL_ENABLED_ALIAS_RULES,
+    apply: (raw, changes) => {
+      const channels = getRecord(raw.channels);
+      if (!channels) {
+        return;
+      }
+
+      const migrateSlackEntry = (entry: Record<string, unknown>, pathPrefix: string) => {
+        const channelEntries = getRecord(entry.channels);
+        if (!channelEntries) {
+          return;
+        }
+        for (const [channelId, channelRaw] of Object.entries(channelEntries)) {
+          const channel = getRecord(channelRaw);
+          if (!channel) {
+            continue;
+          }
+          migrateAllowAliasForPath({
+            entry: channel,
+            pathPrefix: `${pathPrefix}.channels.${channelId}`,
+            changes,
+          });
+          channelEntries[channelId] = channel;
+        }
+        entry.channels = channelEntries;
+      };
+
+      const migrateGoogleChatEntry = (entry: Record<string, unknown>, pathPrefix: string) => {
+        const groups = getRecord(entry.groups);
+        if (!groups) {
+          return;
+        }
+        for (const [groupId, groupRaw] of Object.entries(groups)) {
+          const group = getRecord(groupRaw);
+          if (!group) {
+            continue;
+          }
+          migrateAllowAliasForPath({
+            entry: group,
+            pathPrefix: `${pathPrefix}.groups.${groupId}`,
+            changes,
+          });
+          groups[groupId] = group;
+        }
+        entry.groups = groups;
+      };
+
+      const migrateDiscordEntry = (entry: Record<string, unknown>, pathPrefix: string) => {
+        const guilds = getRecord(entry.guilds);
+        if (!guilds) {
+          return;
+        }
+        for (const [guildId, guildRaw] of Object.entries(guilds)) {
+          const guild = getRecord(guildRaw);
+          if (!guild) {
+            continue;
+          }
+          const channelEntries = getRecord(guild.channels);
+          if (!channelEntries) {
+            guilds[guildId] = guild;
+            continue;
+          }
+          for (const [channelId, channelRaw] of Object.entries(channelEntries)) {
+            const channel = getRecord(channelRaw);
+            if (!channel) {
+              continue;
+            }
+            migrateAllowAliasForPath({
+              entry: channel,
+              pathPrefix: `${pathPrefix}.guilds.${guildId}.channels.${channelId}`,
+              changes,
+            });
+            channelEntries[channelId] = channel;
+          }
+          guild.channels = channelEntries;
+          guilds[guildId] = guild;
+        }
+        entry.guilds = guilds;
+      };
+
+      const migrateProviderAccounts = (
+        provider: "slack" | "googlechat" | "discord",
+        migrateEntry: (entry: Record<string, unknown>, pathPrefix: string) => void,
+      ) => {
+        const providerEntry = getRecord(channels[provider]);
+        if (!providerEntry) {
+          return;
+        }
+        migrateEntry(providerEntry, `channels.${provider}`);
+        const accounts = getRecord(providerEntry.accounts);
+        if (!accounts) {
+          channels[provider] = providerEntry;
+          return;
+        }
+        for (const [accountId, accountRaw] of Object.entries(accounts)) {
+          const account = getRecord(accountRaw);
+          if (!account) {
+            continue;
+          }
+          migrateEntry(account, `channels.${provider}.accounts.${accountId}`);
+          accounts[accountId] = account;
+        }
+        providerEntry.accounts = accounts;
+        channels[provider] = providerEntry;
+      };
+
+      migrateProviderAccounts("slack", migrateSlackEntry);
+      migrateProviderAccounts("googlechat", migrateGoogleChatEntry);
+      migrateProviderAccounts("discord", migrateDiscordEntry);
+      raw.channels = channels;
     },
   }),
 ];
